@@ -7,45 +7,59 @@ _log = logging.getLogger(__name__)
 class WhiteListRule(object):
 
     MATCHABLE = ['cve', 'name', 'version', 'vendor', 'product']
+    version = None
+    status = None
 
     def __init__(self, cve=None, name=None, version=None, vendor=None,
                  product=None, comment=None, status='ignore'):
         self.cve = cve
         self.name = name
-        self.version = version
-        if self.version is not None:
-            assert isinstance(version, str)
         self.comment = comment
         self.vendor = vendor
         self.product = product
-        assert status in ['ignore', 'inprogress']
+        if version is not None and not isinstance(version, str):
+            raise RuntimeError(
+                '{}: version must be a string (try quotes)'.format(self))
+        self.version = version
+        if status not in ['ignore', 'inprogress', 'notfixed']:
+            raise RuntimeError(
+                '{}: status must be one of ignore, inprogress, notfixed'.
+                format(self))
         self.status = status
-        for m in self.MATCHABLE:
-            if getattr(self, m):
-                break
-        else:
-            raise ValueError(
+        if not any((getattr(self, m) for m in self.MATCHABLE)):
+            raise RuntimeError(
                 "Whitelist rules must specify at least one of the matchable "
-                "attributes: {}".format(', '.join(self.MATCHABLE)))
+                "attributes {}: {}/{}".format(
+                    ', '.join(self.MATCHABLE), comment, status))
 
     def matches(self, vulnerability, cpe, derivation):
         """A rule matches when a vulnerability/derivation combination
         is whitelisted by this rule.
         """
         if self.cve and vulnerability.cve_id != self.cve:
-            return
-        if self.name and derivation.simple_name != self.name:
-            return
-        if self.version and self.version not in cpe.versions:
-            return
+            return False
+        if self.name and derivation.pname != self.name:
+            return False
+        if self.version and derivation.version != self.version:
+            return False
         if self.vendor and cpe.vendor != self.vendor:
-            return
+            return False
         if self.product and cpe.product != self.product:
-            return
-        if self.status == 'inprogress':
-            derivation.status = 'inprogress'
+            return False
+# XXX WTF?!?
+        if self.status in ('inprogress', 'notfixed'):
+            derivation.status = self.status
             return
         return True
+
+    def __str__(self):
+        base = '-'.join(filter(None, [self.vendor, self.product, self.name,
+                                      self.version]))
+        if not base and self.cve:
+            return self.cve
+        elif self.cve:
+            return '{} ({})'.format(base, self.cve)
+        return base
 
 
 class WhiteList(object):
@@ -74,7 +88,4 @@ class WhiteList(object):
 
     def __contains__(self, spec):
         (vuln, cpe, derivation) = spec
-        for rule in self.rules:
-            if rule.matches(vuln, cpe, derivation):
-                return True
-        return False
+        return any(rule.matches(vuln, cpe, derivation) for rule in self.rules)

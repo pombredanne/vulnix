@@ -1,21 +1,19 @@
 { pkgs, python }:
 
+with pkgs.lib;
+
 self: super: {
 
-  "flake8" = python.overrideDerivation super."flake8" (old: {
-    buildInputs = old.buildInputs ++ [ self."pytest-runner" ];
+  pytest = python.overrideDerivation super.pytest (old: {
+    propagatedBuildInputs = old.propagatedBuildInputs ++ [
+      super.setuptools-scm
+    ];
   });
 
-  "mccabe" = python.overrideDerivation super."mccabe" (old: {
-    buildInputs = old.buildInputs ++ [ self."pytest-runner" ];
-  });
-
-  "pytest-runner" = python.overrideDerivation super."pytest-runner" (old: {
-    buildInputs = old.buildInputs ++ [ self."setuptools-scm" ];
-  });
-
-  "PyYAML" = python.overrideDerivation super."PyYAML" (old: {
-    propagatedBuildInputs = old.propagatedBuildInputs ++ [ pkgs.libyaml ];
+  pytest-runner = python.overrideDerivation super.pytest-runner (old: {
+    propagatedBuildInputs = old.propagatedBuildInputs ++ [
+      super.setuptools-scm
+    ];
   });
 
 }

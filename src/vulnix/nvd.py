@@ -8,7 +8,7 @@ import datetime
 import gzip
 import logging
 import os
-import os.path
+import os.path as p
 import requests
 import shutil
 import tempfile
@@ -28,22 +28,33 @@ class NVD(object):
     """Access to the National Vulnerability Database.
 
     https://nvd.nist.gov/
-
     """
 
     has_updates = False
 
     def __init__(self, mirror=DEFAULT_MIRROR, cache_dir=DEFAULT_CACHE_DIR):
         self.mirror = mirror.rstrip('/') + '/'
-        self.cache_dir = cache_dir
+        self.cache_dir = p.expanduser(cache_dir)
+        self._root = {}
+        self._root['meta'] = Meta()
+        self._root['archives'] = {}
 
-        current_year = datetime.datetime.today().year
+        current_year = datetime.date.today().year
         self.relevant_archives = [
             str(x) for x in range(current_year - 5, current_year + 1)]
         self.relevant_archives.append('Modified')
 
     def __enter__(self):
-        storage = ZODB.FileStorage.FileStorage(self.cache_dir + '/' + 'Data.fs')
+        if self._root['archives'].keys():
+            raise RuntimeError(
+                'Either use an in-memory NVD database or the ZODB backed '
+                'variant - not both!',
+                'Keys present', self._root.keys())
+        logger.info('Using cache in %s', self.cache_dir)
+        if not p.exists(self.cache_dir):
+            os.makedirs(self.cache_dir)
+        storage = ZODB.FileStorage.FileStorage(
+            p.join(self.cache_dir, 'Data.fs'))
         self._db = ZODB.DB(storage)
         self._connection = self._db.open()
         self._root = self._connection.root()
@@ -69,11 +80,15 @@ class NVD(object):
         for archive in self._root['archives'].values():
             yield from archive.by_product_name(name)
 
+    def add(self, archive):
+        """Inserts an Archive object."""
+        if archive.name not in self._root['archives']:
+            self._root['archives'][archive.name] = archive
+
     def update(self):
         # Add missing archives
         for a in self.relevant_archives:
-            if a not in self._root['archives']:
-                self._root['archives'][a] = Archive(a)
+            self.add(Archive(a))
 
         # Remove superfluous archives
         for a in self._root['archives']:
@@ -81,19 +96,7 @@ class NVD(object):
                 del self._root['archives'][a]
 
         for archive in self._root['archives'].values():
-            # Ensure proper frequency.
-            if archive.name == 'Modified':
-                # Is only updated every two hours. Check hourly.
-                archive.age_limit = 60 * 60
-            elif archive.name == str(datetime.datetime.today().year):
-                # The current year is only updated every 8 days (folding in the
-                # data from Modified), check once every day.
-                archive.age_limit = 1 * 24 * 60 * 60
-            else:
-                archive.age_limit = None
             self.has_updates |= archive.update(self.mirror)
-            logging.debug('{} has {} products'.format(
-                archive.name, len(archive.products or [])))
         transaction.commit()
 
 
@@ -106,19 +109,64 @@ class Meta(Persistent):
     unpacked = 0
 
 
+def decompress(fileobj, dir=None):
+    """Decompresses gzipped XML data into a temporary file.
+
+    Returns temporary file. The callee takes responsibility to remove
+    that file after use.
+    """
+    tf = tempfile.NamedTemporaryFile(
+        'wb', prefix='vulnix.nvd.', suffix='.xml', delete=False, dir=dir)
+    logger.debug("Uncompressing {}".format(tf.name))
+    with gzip.open(fileobj, 'rb') as f_in:
+        shutil.copyfileobj(f_in, tf)
+    tf.close()
+    return tf.name
+
+
+class Download:
+    """Wrapper for downloading compressed XML data.
+
+    Uncompressed XML is written to a temporary file and deleted once the
+    context is exited.
+    """
+
+    def __init__(self, url):
+        self.url = url
+        self.xml = None
+
+    def __enter__(self):
+        logger.debug("Downloading {}".format(self.url))
+        r = requests.get(self.url, stream=True)
+        r.raise_for_status()
+        self.xml = decompress(r.raw)
+        return self.xml
+
+    def __exit__(self, exc_type, exc_value, exc_tb):
+        os.unlink(self.xml)
+        self.xml = None
+        return False  # re-raise
+
+
 class Archive(Persistent):
 
-    # Either set to a duration to update every `age_limit` seconds or to None
-    # to never update after the initial fetch.
-    age_limit = None
-    name = None
-    products = None
     last_update = 0
-
-    _cleanup = ()
 
     def __init__(self, name):
         self.name = name
+        self.products = OOBTree.OOBTree()
+        # Either set to a duration to update every `age_limit` seconds or to
+        # None to never update after the initial fetch.
+        if name == 'Modified':
+            # Is updated every two hours.
+            self.age_limit = 3600
+        elif name == str(datetime.date.today().year):
+            # The current year is only updated every 8 days
+            # (folding in the data from Modified).
+            self.age_limit = 4 * 86400
+        else:
+            # Check for errata (quite infrequent).
+            self.age_limit = 30 * 86400
 
     @property
     def upstream_filename(self):
@@ -138,43 +186,14 @@ class Archive(Persistent):
 
     def update(self, mirror):
         if self.is_current:
-            logger.info('{} is up-to-date.'.format(self.name))
+            logger.debug('"{}" is up-to-date'.format(self.name))
             return False
-        # Delete the parsed data.
-        self.products = OOBTree.OOBTree()
-        logger.info('Updating {}'.format(self.name))
-        try:
-            filename = self.download(mirror)
-            self.parse(filename)
-        except Exception:
-            self.clean()
-            raise
+        self.products.clear()
+        logger.info('Updating "{}"'.format(self.name))
+        with Download(mirror + self.upstream_filename) as xml:
+            self.parse(xml)
         self.last_update = time.time()
         return True
-
-    def download(self, mirror):
-        self._cleanup = []
-
-        # Phase 1: download
-        _, compressed = tempfile.mkstemp()
-        self._cleanup.append(compressed)
-
-        url = mirror + self.upstream_filename
-        logger.debug("Downloading {}".format(url))
-        r = requests.get(url, stream=True)
-        r.raise_for_status()
-        with open(compressed, 'wb') as fd:
-            for chunk in r.iter_content(128*1024):
-                fd.write(chunk)
-
-        # Phase 2: uncompress
-        _, uncompressed = tempfile.mkstemp()
-        self._cleanup.append(uncompressed)
-        logger.debug("Uncompressing {}".format(compressed))
-        with gzip.open(compressed, 'rb') as f_in:
-            with open(uncompressed, 'wb') as f_out:
-                shutil.copyfileobj(f_in, f_out)
-        return uncompressed
 
     def parse(self, filename):
         logger.debug("Parsing {}".format(filename))
@@ -184,8 +203,7 @@ class Archive(Persistent):
             vx = Vulnerability.from_node(node)
             # We don't use a ZODB set here as we a) won't ever change this
             # again in the future (we just rebuild the tree) and also I want to
-            # keep records more coherent to avoid making millions of
-            # micro-records.
+            # avoid making millions of micro-records.
             for cpe in vx.affected_products:
                 self.products.setdefault(cpe.product, set())
                 self.products[cpe.product].add(vx)
@@ -197,11 +215,6 @@ class Archive(Persistent):
             while node.getprevious() is not None:
                 del node.getparent()[0]
 
-    def clean(self):
-        for file in self._cleanup:
-            if os.path.exists(file):
-                os.unlink(file)
-
 
 class Vulnerability(Persistent):
 
@@ -210,11 +223,6 @@ class Vulnerability(Persistent):
 
     def __init__(self):
         self.affected_products = []
-
-    @property
-    def url(self):
-        return ('https://web.nvd.nist.gov/view/vuln/detail?vulnId={}'.
-                format(self.cve_id))
 
     @staticmethod
     def from_node(node):
