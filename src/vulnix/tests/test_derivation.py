@@ -1,4 +1,4 @@
-from vulnix.derivation import Derive, split_name, load
+from vulnix.derivation import Derive, split_name, load, NoVersionError
 import os
 import pkg_resources
 import pytest
@@ -14,12 +14,6 @@ def test_load_drv_explicit_version():
     d = load(fix('cyrus-sasl-2.5.10.drv'))
     assert d.pname == 'cyrus-sasl'
     assert d.version == '2.5.10'
-
-
-def test_product_candidates():
-    d = Derive(envVars={'name': 'python2.7-pytest-runner-2.6.2.drv'})
-    assert (['python2.7_pytest_runner', 'python2.7_pytest', 'python2.7'] ==
-            list(d.product_candidates))
 
 
 def test_should_not_load_arbitrary_code():
@@ -39,8 +33,7 @@ def test_split_name():
         'network', '2.6.3.2-r1.cabal')
     assert split_name('python2.7-pytest-runner-2.6.2.drv') == (
         'python2.7-pytest-runner', '2.6.2')
-    assert split_name('CVE-2017-5526.patch.drv', '5526.patch') == (
-        'CVE-2017', '5526.patch')
+    assert split_name('hook.drv') == ('hook', None)
 
 
 def test_split_nameversion():
@@ -50,9 +43,8 @@ def test_split_nameversion():
 
 
 def test_split_name_noversion():
-    d = Derive(envVars={'name': 'hook'})
-    assert d.pname == 'hook'
-    assert d.version is None
+    with pytest.raises(NoVersionError):
+        Derive(envVars={'name': 'hook'})
 
 
 def test_guess_cves_from_direct_patches_bzip2():
@@ -90,3 +82,22 @@ def test_ignore_patched_cves_during_check(nvd_modified):
     deriv = load(fix('unzip-6.0.drv'))
     deriv.check(nvd_modified)
     assert set() == deriv.affected_by
+
+
+def test_ordering():
+    assert Derive(name='python-2.7.14') == Derive(name='python-2.7.14')
+    assert Derive(name='python-2.7.14') != Derive(name='python-2.7.13')
+    assert (Derive(name='coreutils-8.29',
+                   affected_by={'CVE-2017-18018'}) <
+            Derive(name='patch-2.7.6',
+                   affected_by={'CVE-2018-6952', 'CVE-2018-6951'}))
+    assert Derive(name='python-2.7.14') > Derive(name='python-2.7.13')
+    assert not Derive(name='python-2.7.13') > Derive(name='python-2.7.14')
+    assert (Derive(name='patch-2.7.6',
+                   affected_by={'CVE-2018-6951', 'CVE-2018-6952'}) >
+            Derive(name='patch-2.7.6', affected_by={'CVE-2018-6951'}))
+
+
+def test_structured_attrs():
+    d = load(fix('structured-attrs-1.drv'))
+    assert d.name == 'structured-attrs-1'

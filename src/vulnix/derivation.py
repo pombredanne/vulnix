@@ -1,25 +1,27 @@
+import functools
+import json
 import re
 
-from vulnix.utils import call
 
-# see parseDrvName
+class NoVersionError(RuntimeError):
+
+    def __init__(self, drv_name):
+        self.drv_name = drv_name
+
+
+# see parseDrvName built-in Nix function
+# https://nixos.org/nix/manual/#ssec-builtins
 R_VERSION = re.compile(r'^(\S+)-([0-9]\S*)$')
 
 
-def split_name(fullname, version=None):
-    """Returns the pure package name and version of a derivation.
-
-    If the version is not already known, a bit of guesswork is involved.
-    The heuristic is the same as in builtins.parseDrvName.
-    """
+def split_name(fullname):
+    """Returns the pure package name and version of a derivation."""
+    fullname = fullname.lower()
     if fullname.endswith('.drv'):
-        fullname = fullname[0:fullname.rindex('.drv')]
-    if version:
-        return fullname.replace('-' + version, ''), version
+        fullname = fullname[:-4]
     m = R_VERSION.match(fullname)
     if m:
         return m.group(1), m.group(2)
-    # no idea
     return fullname, None
 
 
@@ -30,6 +32,12 @@ def load(path):
     return d_obj
 
 
+def destructure(env):
+    """Decodes Nix 2.0 __structuredAttrs."""
+    return json.loads(env['__json'])
+
+
+@functools.total_ordering
 class Derive(object):
 
     store_path = None
@@ -38,71 +46,63 @@ class Derive(object):
     # The derivation files are just accidentally Python-syntax, but hey!
     def __init__(self, _output=None, _inputDrvs=None, _inputSrcs=None,
                  _system=None, _builder=None, _args=None,
-                 envVars={}, derivations=None):
-        self.envVars = dict(envVars)
-        self.name = self.envVars['name']
-        if 'version' in self.envVars:
-            self.version = self.envVars['version']
-            if 'pname' in self.envVars:
-                self.pname = self.envVars['pname']
-            else:
-                self.pname = split_name(self.name, self.envVars['version'])[0]
-        else:
-            self.pname, self.version = split_name(self.name)
+                 envVars={}, derivations=None, name=None, affected_by=None):
+        envVars = dict(envVars)
+        self.name = name or envVars.get('name')
+        if not self.name:
+            self.name = destructure(envVars)['name']
+        self.pname, self.version = split_name(self.name)
+        if not self.version:
+            raise NoVersionError(self.name)
+        self.patches = envVars.get('patches', '')
+        self.affected_by = affected_by or set()
 
-        self.affected_by = set()
-        self.status = None
+    def __repr__(self):
+        return '<Derive({}, {})>'.format(
+                repr(self.name), repr(self.affected_by))
+
+    def __eq__(self, other):
+        if type(self) != type(other):
+            return NotImplemented
+        return ((self.name, self.version, self.affected_by) ==
+                (other.name, other.version, other.affected_by))
+
+    def __lt__(self, other):
+        if type(self) != type(other):
+            return NotImplemented
+        return ((self.name, self.version, self.affected_by) <
+                (other.name, other.version, other.affected_by))
+
+    def __gt__(self, other):
+        if type(self) != type(other):
+            return NotImplemented
+        return ((self.name, self.version, self.affected_by) >
+                (other.name, other.version, other.affected_by))
 
     @property
     def is_affected(self):
         return bool(self.affected_by)
 
-    @property
     def product_candidates(self):
-        variation = self.pname.split('-')
-        while variation:
-            yield '_'.join(variation)
-            variation.pop()
+        return {self.pname, self.pname.replace('-', '_')}
 
     def check(self, nvd):
         patched_cves = self.patched()
-        for candidate in self.product_candidates:
-            for vuln in nvd.by_product_name(candidate):
-                for affected_product in vuln.affected_products:
-                    if not self.matches(vuln.cve_id, affected_product):
+        for prod in self.product_candidates():
+            for vuln in nvd.by_product_name(prod):
+                for cpe in vuln.affected_products:
+                    if not self.matches(cpe):
                         continue
                     if vuln.cve_id not in patched_cves:
                         self.affected_by.add(vuln.cve_id)
                         break
 
-    def matches(self, cve_id, cpe):
-        # Step 1: determine product name
-        prefix = cpe.product + '-'
-        if self.name == cpe.product:
-            version = None
-        elif self.name.startswith(prefix):
-            version = self.name.replace(prefix, '', 1)
-            if version not in cpe.versions:
-                return False
-        else:
-            # This product doesn't match at all.
-            return False
-
-        # We matched the product and think the version is affected.
-        return True
-
-    def roots(self):
-        return call(
-            ['nix-store', '--query', '--roots', self.store_path]).split('\n')
-
-    def referrers(self):
-        return call(['nix-store', '--query', '--referrers',
-                     self.store_path]).split('\n')
+    def matches(self, cpe):
+        return self.pname == cpe.product and self.version in cpe.versions
 
     R_CVE = re.compile(r'CVE-\d{4}-\d+', flags=re.IGNORECASE)
 
     def patched(self):
         """Guess which CVEs are patched from patch names."""
         return set(
-            m.group(0).upper() for m in self.R_CVE.finditer(
-                self.envVars.get('patches', '')))
+            m.group(0).upper() for m in self.R_CVE.finditer(self.patches))

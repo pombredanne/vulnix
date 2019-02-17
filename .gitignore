@@ -4,8 +4,10 @@ bin/
 deploy-rsa
 develop-eggs/
 dist/
+/doc/vulnix*.[15]
+/doc/vulnix*.[15].html
 *.egg-info/
-eggs
+.eggs/
 htmlcov/
 include
 .installed.cfg
@@ -17,7 +19,9 @@ nvdcve-2.0-*.xml.gz
 official-cpe-dictionary*
 pip-selfcheck.json
 *.py?
+.pytest_cache/
 pyvenv.cfg
+README.html
 .remote-sync.json
 /report.xml
 /result

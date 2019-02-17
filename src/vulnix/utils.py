@@ -7,11 +7,6 @@ import time
 _log = logging.getLogger(__name__)
 
 
-def cve_url(cve_id):
-    return ('https://web.nvd.nist.gov/view/vuln/detail?vulnId={}'.
-            format(cve_id))
-
-
 def batch(iterable, size, callable):
     b = size
     for x in iterable:

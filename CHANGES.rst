@@ -2,18 +2,66 @@ Changes
 =======
 
 
-1.4.1 (unreleased)
+1.7.2 (unreleased)
 ------------------
 
+- Nothing changed yet.
+
+
+1.7.1 (2018-07-23)
+------------------
+
+- Improve error messages when TOML files contain syntax errors.
+- Fix install requirements so that they match upstream nixpkgs
+  (NixOS/nixpkgs#43999).
+
+
+1.7 (2018-07-20)
+----------------
+
+- Selective CVE reporting: Only those CVEs are reported for which no whitelist
+  entry exists (#41).
+- Consider all applicable whitelist entries for a given package (pkg-version,
+  pkg, "*") (#42).
+- Refine TOML section header check.
+
+
+1.6.3 (2018-05-02)
+------------------
+
+- *Really* fix FC-101294. Now for whitelists containing more than one line :)
+- Fail on spaces between package and version in whitelist headers.
+
+
+1.6.2 (2018-05-02)
+------------------
+
+- Sort CVEs in JSON output.
+- Bugfix: fail clearly if section headers are not quoted (FC-101294).
+
+
+1.6.1 (2018-04-20)
+------------------
+
+- Parse derivation files with `__structuredAttrs = true` (#37).
+
+
+1.6.0 (2018-04-19)
+------------------
+
+- Completely reworked whitelisting subsystem. Whitelists can now be written as
+  TOML files and support a more expressive range of options including expiry
+  datedates. The old YAML syntax is still supported (#36).
 - Ignore case when guessing CVE identifiers from patch file names (thanks to
-  adisbladis).
+  @adisbladis).
+- Add man pages (#29).
 
 
 1.4.0 (2017-11-27)
 ------------------
 
 - Guesses applied CVE patches out of the `patches` derivation envVar (see
-  nixpkgs #15660).
+  nixpkgs FC-15660).
 
 
 1.3.4 (2017-10-29)
@@ -28,7 +76,7 @@ Changes
 1.3.3 (2017-10-16)
 ------------------
 
-- Fix return code bug (#28741).
+- Fix return code bug (FC-28741).
 - Fix partial whitelisting of products where several vulnerable versions are
   present on the system at the same time (#24).
 - Improve error reporting for incorrectly formed whitelist rules.

@@ -9,6 +9,7 @@ import os.path
 def project_path(*names):
     return os.path.join(os.path.dirname(__file__), *names)
 
+
 with open(project_path('VERSION')) as f:
     version = f.read().strip()
 
@@ -22,18 +23,20 @@ setup(
     name='vulnix',
     version=version,
     install_requires=[
-        'click==6.7',
-        'colorama==0.3.9',
-        'lxml==3.8.0',
-        'pyyaml==3.12',
-        'requests==2.18.3',
-        'ZODB==5.2.4',
+        'click>=6.7',
+        'colorama>=0.3',
+        'lxml>=4',
+        'pyyaml>=3.12,<4',
+        'requests>=2.18',
+        'toml>=0.9',
+        'ZODB>=5.4',
     ],
     extras_require={
         'test': [
+            'freezegun>0.3',
             'pytest>=3.2',
-            'pytest-catchlog>=1.2',
             'pytest-cov>=2.5',
+            'pytest-flake8',
             'pytest-runner>=2.11,<3dev',
             'pytest-timeout>=1.2',
             'setuptools_scm>=1.15',

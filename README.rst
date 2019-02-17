@@ -10,7 +10,7 @@ monitoring integration for Sensu.
 
 Example output::
 
-  Found 5 advisories for libxslt, pcre, perl, ... (and 2 more)
+  Found 5 advisories
 
   ========================================================================
   libxslt-1.1.29
@@ -30,7 +30,7 @@ Example output::
 Theory of operation
 -------------------
 
-`vulnix` pulls all published CVEs from NIST and caches them locally. It
+`vulnix` pulls all published CVEs from NIST_ and caches them locally. It
 matches name and version of all derivations referenced from the command line
 against known CVE entries. A *whitelist* is used to filter out unwanted results.
 
@@ -46,6 +46,7 @@ System requirements
 - Parses `*.drv` files directly. Tested with Nix 1.10 and 1.11.
 - It refuses to work without some locale environment settings. Try `export
   LANG=C.UTF-8` if you see encoding errors.
+
 
 Usage Example
 =============
@@ -64,21 +65,107 @@ Usage Example
 
 - JSON output for machine post-processing::
 
-    vulnix --json result/
+    vulnix --json /nix/store/my-derivation.drv
+
+See `vulnix --help` for a list of all options.
 
 
-Whitelist
-=========
+Whitelisting
+============
 
-The whitelist file uses a sub-set of the
-`YAML <https://en.wikipedia.org/wiki/YAML>`__ language to define rules
-which matches shall be ignored or in other words are declared to be
-trusted or in progress, hence the term whitelist. If the match is
-**partial**, e.G. there is a package which is affected by more than one
-vulnerability, but only one is whitelist, the match will still be
-printed except for the declared exception.
+`vulnix` output may contain false positives, unfixable packages or stuff which
+is known to be addressed. The *whitelist* feature allows to exclude packages
+matching certain criteria.
+
+Usage
+-----
+
+Load whitelists from either local files or HTTP servers::
+
+  vulnix -w /path/to/whitelist.toml \
+         -w https://example.org/published-whitelist.toml
 
 Syntax
 ------
 
-[TBD: the whitelist feature is being revamped at the moment]
+Whitelists are TOML_ files which contain the package to be filtered as section
+headers, followed by further per-package options.
+
+Section headings - package selection
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Exclude a package at a specific version::
+
+  ["openjpeg-2.3.0"]
+  ...
+
+Exclude a package regardless of version (additional CVE filters may apply, see
+below)::
+
+  ["openjpeg"]
+
+Exclude all packages (see below for CVE filters, again)::
+
+  ["*"]
+
+Options
+^^^^^^^
+
+cve
+  List of CVE identifiers to match. The whitelist rule is valid as long as the
+  detected CVEs are a subset of the CVEs listed here. If additional CVEs are
+  detected, this whitelist rule is not effective anymore.
+
+until
+  Date in the form "YYYY-MM-DD" which confines this rule's lifetime. On the
+  specified date and later, this whitelist rule is not effective anymore.
+
+issue_url
+  URL or list of URLs that point to any issue tracker. Informational only.
+
+comment
+  String or list of strings containing free text. Informational only.
+
+
+Examples
+--------
+
+Create a ticket on your favourite issue tracker. Estimate the time to get the
+vulnerable package fixed. Create whitelist entry::
+
+  ["ffmpeg-3.4.2"]
+  cve = ["CVE-2018-6912", "CVE-2018-7557"]
+  until = "2018-05-01"
+  issue_url = "https://issues.example.com/29952"
+  comment = "need to backport patch"
+
+This particular version of ffmpeg will be left out from reports until either
+another CVE gets published or the specified date is reached.
+
+
+CVE patch auto-detection
+========================
+
+`vulnix` will inspect derivations for patches which supposedly fix specific
+CVEs. When a patch filename contains one or more CVE identifiers, these will not
+reported anymore. Example Nix code::
+
+  patches = [ ./CVE-2018-6951.patch ];
+
+Patches which fix multiple CVEs should name them all with a non-numeric
+separator, e.g. `CVE-2017-14159+CVE-2017-17740.patch`.
+
+Auto-detection even works when patches are pulled via `fetchpatch` and friends
+as long as there is a CVE identifier in the name. Example::
+
+  patches = [
+    (fetchpatch {
+      name = "CVE-2018-9055.patch";
+      url = http://paste.opensuse.org/view/raw/330751ce;
+      sha256 = "0m798m6c4v9yyhql7x684j5kppcm6884n1rrb9ljz8p9aqq2jqnm";
+    })
+  ];
+
+
+.. _NIST: https://nvd.nist.gov/vuln/
+.. _TOML: https://github.com/toml-lang/toml/
